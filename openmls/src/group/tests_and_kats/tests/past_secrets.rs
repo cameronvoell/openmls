@@ -157,3 +157,286 @@ fn test_past_secrets_in_group(
         }
     }
 }
+
+#[openmls_test::openmls_test]
+fn test_past_secrets_in_group_simplified_one(
+    ciphersuite: Ciphersuite,
+    provider: &impl crate::storage::OpenMlsProvider,
+) {
+    const MAX_EPOCHS: usize = 3;
+    let group_id = GroupId::from_slice(b"Test Group");
+
+    // Generate credentials
+    let alice_credential_with_keys = generate_credential_with_key(
+        b"Alice".to_vec(),
+        ciphersuite.signature_algorithm(),
+        provider,
+    );
+    let bob_credential_with_keys =
+        generate_credential_with_key(b"Bob".to_vec(), ciphersuite.signature_algorithm(), provider);
+
+    // Generate KeyPackages
+    let bob_key_package = generate_key_package(
+        ciphersuite,
+        Extensions::empty(),
+        provider,
+        bob_credential_with_keys.clone(),
+    );
+
+    // Define the MlsGroup configuration
+
+    let mls_group_create_config = MlsGroupCreateConfig::builder()
+        .max_past_epochs(MAX_EPOCHS)
+        .ciphersuite(ciphersuite)
+        .build();
+
+    // === Alice creates a group ===
+    let mut alice_group = MlsGroup::new_with_group_id(
+        provider,
+        &alice_credential_with_keys.signer,
+        &mls_group_create_config,
+        group_id.clone(),
+        alice_credential_with_keys.credential_with_key.clone(),
+    )
+    .expect("An unexpected error occurred.");
+
+    // Alice adds Bob
+    let (_message, welcome, _group_info) = alice_group
+        .add_members(
+            provider,
+            &alice_credential_with_keys.signer,
+            &[bob_key_package.key_package().clone()],
+        )
+        .expect("An unexpected error occurred.");
+
+    alice_group
+        .merge_pending_commit(provider)
+        .expect("error merging pending commit");
+
+    let welcome: MlsMessageIn = welcome.into();
+    let welcome = welcome
+        .into_welcome()
+        .expect("expected message to be a welcome");
+
+    let mut bob_group = StagedWelcome::new_from_welcome(
+        provider,
+        mls_group_create_config.join_config(),
+        welcome,
+        Some(alice_group.export_ratchet_tree().into()),
+    )
+    .expect("Error creating staged join from Welcome")
+    .into_group(provider)
+    .expect("Error creating group from staged join");
+
+    // Generate application message for different epochs
+
+    let mut application_messages = Vec::new();
+    let mut update_commits = Vec::new();
+
+    for _ in 0..(MAX_EPOCHS * 2) {
+        let application_message = alice_group
+            .create_message(provider, &alice_credential_with_keys.signer, &[1, 2, 3])
+            .expect("An unexpected error occurred.");
+
+        application_messages.push(application_message.into_protocol_message().unwrap());
+
+        let (message, _welcome, _group_info) = alice_group
+            .self_update(
+                provider,
+                &alice_credential_with_keys.signer,
+                LeafNodeParameters::default(),
+            )
+            .expect("An unexpected error occurred.");
+
+        update_commits.push(message.clone());
+
+        alice_group
+            .merge_pending_commit(provider)
+            .expect("error merging pending commit");
+    }
+
+    // Bob processes all update commits
+
+    for update_commit in update_commits {
+        let bob_processed_message = bob_group
+            .process_message(provider, update_commit.into_protocol_message().unwrap())
+            .expect("An unexpected error occurred.");
+
+        if let ProcessedMessageContent::StagedCommitMessage(staged_commit) =
+            bob_processed_message.into_content()
+        {
+            bob_group
+                .merge_staged_commit(provider, *staged_commit)
+                .expect("Error merging commit.");
+        } else {
+            unreachable!("Expected a StagedCommit.");
+        }
+    }
+
+    // === Test application messages from older epochs ===
+
+    // The first messages should fail
+    for application_message in application_messages.iter().take(MAX_EPOCHS) {
+        let err = bob_group
+            .process_message(provider, application_message.clone())
+            .expect_err("An unexpected error occurred.");
+        assert!(matches!(
+            err,
+            ProcessMessageError::ValidationError(ValidationError::UnableToDecrypt(
+                MessageDecryptionError::AeadError
+            ),)
+        ));
+    }
+
+    // The last messages should not fail
+    for application_message in application_messages.iter().skip(MAX_EPOCHS) {
+        let bob_processed_message = bob_group
+            .process_message(provider, application_message.clone())
+            .expect("An unexpected error occurred.");
+
+        if let ProcessedMessageContent::ApplicationMessage(application_message) =
+            bob_processed_message.into_content()
+        {
+            assert_eq!(application_message.into_bytes(), &[1, 2, 3]);
+        } else {
+            unreachable!("Expected an ApplicationMessage.");
+        }
+    }
+}
+
+#[openmls_test::openmls_test]
+fn test_past_secrets_in_group_simplified_two(
+    ciphersuite: Ciphersuite,
+    provider: &impl crate::storage::OpenMlsProvider,
+) {
+    const MAX_EPOCHS: usize = 1;
+    let group_id = GroupId::from_slice(b"Test Group");
+
+    // Generate credentials
+    let alice_credential_with_keys = generate_credential_with_key(
+        b"Alice".to_vec(),
+        ciphersuite.signature_algorithm(),
+        provider,
+    );
+    let bob_credential_with_keys =
+        generate_credential_with_key(b"Bob".to_vec(), ciphersuite.signature_algorithm(), provider);
+
+    // Generate KeyPackages
+    let bob_key_package = generate_key_package(
+        ciphersuite,
+        Extensions::empty(),
+        provider,
+        bob_credential_with_keys.clone(),
+    );
+
+    // Define the MlsGroup configuration
+
+    let mls_group_create_config = MlsGroupCreateConfig::builder()
+        .max_past_epochs(MAX_EPOCHS)
+        .ciphersuite(ciphersuite)
+        .build();
+
+    // === Alice creates a group ===
+    let mut alice_group = MlsGroup::new_with_group_id(
+        provider,
+        &alice_credential_with_keys.signer,
+        &mls_group_create_config,
+        group_id.clone(),
+        alice_credential_with_keys.credential_with_key.clone(),
+    )
+    .expect("An unexpected error occurred.");
+
+    // Alice adds Bob
+    let (_message, welcome, _group_info) = alice_group
+        .add_members(
+            provider,
+            &alice_credential_with_keys.signer,
+            &[bob_key_package.key_package().clone()],
+        )
+        .expect("An unexpected error occurred.");
+
+    alice_group
+        .merge_pending_commit(provider)
+        .expect("error merging pending commit");
+
+    let welcome: MlsMessageIn = welcome.into();
+    let welcome = welcome
+        .into_welcome()
+        .expect("expected message to be a welcome");
+
+    let mut bob_group = StagedWelcome::new_from_welcome(
+        provider,
+        mls_group_create_config.join_config(),
+        welcome,
+        Some(alice_group.export_ratchet_tree().into()),
+    )
+    .expect("Error creating staged join from Welcome")
+    .into_group(provider)
+    .expect("Error creating group from staged join");
+
+    // === Alice sends a message ===
+    let alice_message_1 = alice_group
+        .create_message(provider, &alice_credential_with_keys.signer, &[1, 2, 3])
+        .expect("An unexpected error occurred.")
+        .into_protocol_message()
+        .unwrap();
+
+    // === Bob sends a message ===
+    let bob_message_1 = bob_group
+        .create_message(provider, &bob_credential_with_keys.signer, &[2, 3, 4])
+        .expect("An unexpected error occurred.")
+        .into_protocol_message()
+        .unwrap();
+
+    // === Alice creates a commit message ===
+    let (commit_message, _welcome, _group_info) = alice_group
+        .self_update(
+            provider,
+            &alice_credential_with_keys.signer,
+            LeafNodeParameters::default(),
+        )
+        .expect("An unexpected error occurred.");
+
+    alice_group
+        .merge_pending_commit(provider)
+        .expect("error merging pending commit");
+
+        alice_group
+        .self_update(
+            provider,
+            &alice_credential_with_keys.signer,
+            LeafNodeParameters::default(),
+        )
+        .expect("An unexpected error occurred.");
+
+    alice_group
+        .merge_pending_commit(provider)
+        .expect("error merging pending commit");
+
+    // === Alice sends another message ===
+    let alice_message_2 = alice_group
+        .create_message(provider, &alice_credential_with_keys.signer, &[3, 4, 5])
+        .expect("An unexpected error occurred.")
+        .into_protocol_message()
+        .unwrap();
+
+    // === Bob sends a message ===
+    let bob_message_2 = bob_group
+        .create_message(provider, &bob_credential_with_keys.signer, &[4, 5, 6])
+        .expect("An unexpected error occurred.")
+        .into_protocol_message()
+        .unwrap();
+
+
+    let alice_processed_message_4 = alice_group
+        .process_message(provider, bob_message_2.clone())
+        .expect("An unexpected error occurred.");
+
+    if let ProcessedMessageContent::ApplicationMessage(application_message) =
+        alice_processed_message_4.into_content()
+    {
+        assert_eq!(application_message.into_bytes(), &[4, 5, 6]);
+    } else {
+        unreachable!("Expected an ApplicationMessage.");
+    }
+}
