@@ -309,7 +309,7 @@ fn test_past_secrets_in_group_simplified_two(
     ciphersuite: Ciphersuite,
     provider: &impl crate::storage::OpenMlsProvider,
 ) {
-    const MAX_EPOCHS: usize = 1;
+    const MAX_EPOCHS: usize = 2;
     let group_id = GroupId::from_slice(b"Test Group");
 
     // Generate credentials
@@ -374,22 +374,8 @@ fn test_past_secrets_in_group_simplified_two(
     .into_group(provider)
     .expect("Error creating group from staged join");
 
-    // === Alice sends a message ===
-    let alice_message_1 = alice_group
-        .create_message(provider, &alice_credential_with_keys.signer, &[1, 2, 3])
-        .expect("An unexpected error occurred.")
-        .into_protocol_message()
-        .unwrap();
-
-    // === Bob sends a message ===
-    let bob_message_1 = bob_group
-        .create_message(provider, &bob_credential_with_keys.signer, &[2, 3, 4])
-        .expect("An unexpected error occurred.")
-        .into_protocol_message()
-        .unwrap();
-
     // === Alice creates a commit message ===
-    let (commit_message, _welcome, _group_info) = alice_group
+    alice_group
         .self_update(
             provider,
             &alice_credential_with_keys.signer,
@@ -401,7 +387,7 @@ fn test_past_secrets_in_group_simplified_two(
         .merge_pending_commit(provider)
         .expect("error merging pending commit");
 
-        alice_group
+    alice_group
         .self_update(
             provider,
             &alice_credential_with_keys.signer,
@@ -412,28 +398,22 @@ fn test_past_secrets_in_group_simplified_two(
     alice_group
         .merge_pending_commit(provider)
         .expect("error merging pending commit");
-
-    // === Alice sends another message ===
-    let alice_message_2 = alice_group
-        .create_message(provider, &alice_credential_with_keys.signer, &[3, 4, 5])
-        .expect("An unexpected error occurred.")
-        .into_protocol_message()
-        .unwrap();
 
     // === Bob sends a message ===
-    let bob_message_2 = bob_group
+    let bob_message = bob_group
         .create_message(provider, &bob_credential_with_keys.signer, &[4, 5, 6])
         .expect("An unexpected error occurred.")
         .into_protocol_message()
         .unwrap();
 
+    // === Alice tries to decrypt the message ===
 
-    let alice_processed_message_4 = alice_group
-        .process_message(provider, bob_message_2.clone())
+    let alice_processed_message = alice_group
+        .process_message(provider, bob_message.clone())
         .expect("An unexpected error occurred.");
 
     if let ProcessedMessageContent::ApplicationMessage(application_message) =
-        alice_processed_message_4.into_content()
+        alice_processed_message.into_content()
     {
         assert_eq!(application_message.into_bytes(), &[4, 5, 6]);
     } else {
